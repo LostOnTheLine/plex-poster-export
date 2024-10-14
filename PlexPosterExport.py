@@ -4,73 +4,137 @@ token = ''
 
 ######################################################################################################
 #                                                                                                    #
-# - Movie Libraries -> Download poster and place next to video as poster.png                         # 
+# - Movie Libraries -> Download poster and place next to video as poster.png                         #
 # - TV Libraries -> Download show poster, place in root folder for show as poster.png                #
-#                -> Download season poster and save to season folder as poster.png                   #
+#                -> Download season poster and save to root folder as season##.png                   #
 #                -> Download episode title card, place next to episode named the same as episode     #
 #                                                                                                    #
 ######################################################################################################
 
+import logging
+from logging.handlers import RotatingFileHandler
 from plexapi.server import PlexServer
 from plexapi.utils import download
 from plexapi import video
+from plexapi.exceptions import NotFound
+
+# Setup logging
+log_file = 'plex_poster_extract.log'
+logging.basicConfig(level=logging.INFO)
+handler = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=1)  # 10MB log file
+logger = logging.getLogger()
+logger.addHandler(handler)
+
 if baseurl == '' and token == '' :
     baseurl = input('What is your Plex URL:  ')
     token = input('What is your Plex Token:  ')
-repeat = True
+
 plex = PlexServer(baseurl, token)
-    
-def runScript():
-    # list libraries for user to select which to export from
-    sectionList = [x.title for x in plex.library.sections()]
-    print(" ")
-    print ("  Your Libraries: ")
-    for i in sectionList:
-        print ("      " + str(sectionList.index(i)) + " - " + i)
+skipped_items = []
 
-    selectedLibrary = int(input("Enter the number of the library to export posters from:  "))
-    selectedLibraryType = plex.library.section(sectionList[selectedLibrary]).type
-    selectedLibraryItems = plex.library.section(sectionList[selectedLibrary]).search()
+def download_artwork(item, artwork_url, save_path):
+    if artwork_url is None:
+        logger.warning(f"{item} failed Artwork = None")
+        return False
+    try:
+        download(baseurl + artwork_url, token, save_path, item)
+    except NotFound:
+        logger.error(f"Not Found: {item} {artwork_url}")
+        return False
+    return True
 
-    if selectedLibraryType == "movie" :
-        # loop through movies and export poster
-        for video in selectedLibraryItems:
-            videoTitle = video.title
-            videoPath = video.media[0].parts[0].file
-            videoFolder = videoPath.rpartition('\\')[0] + "\\"
-            videoPoster = video.thumb
-            print("Downloading poster for " + videoTitle)
-            posterPath = download(baseurl + videoPoster, token, "poster.png", videoFolder)
+def report_skipped_items():
+    if skipped_items:
+        print("\nSkipped items:")
+        for item in skipped_items:
+            print(f"  {item['title']} - {item['reason']}")
+    else:
+        print("No items were skipped.")
 
-    if selectedLibraryType == "show" :
-        # loop through tv shows and export main show poster
-        for video in selectedLibraryItems:
-            showTitle = video.title
-            showPath = video.locations
-            showFolder = showPath[0] + "\\"
-            showPoster = video.thumb
-            print("Downloading images for " + showTitle)
-            posterPath = download(baseurl + showPoster, token, "poster.png", showFolder)
-            
-            # loop through seasons and export season poster
-            for season in video.seasons():
-                seasonTitle = season.title
-                seasonThumb = season.thumb
-                seasonPoster = download(baseurl + seasonThumb, token, seasonTitle + ".png", showFolder)
-                
-            # now loop through episodes and grab title cards
-            for episode in video.episodes() :
+def process_movies(movies):
+    for video in movies:
+        videoTitle = video.title
+        videoPath = video.media[0].parts[0].file
+        videoFolder = videoPath.rpartition('\\')[0] + "\\"
+        videoPoster = video.thumb
+
+        print(f"Downloading poster for {videoTitle}")
+        if not download_artwork(videoFolder, videoPoster, "poster.png"):
+            skipped_items.append({"title": videoTitle, "reason": "Missing Poster"})
+            logger.info(f"Skipped movie: {videoTitle} - Missing Poster")
+
+def process_shows(shows, download_episode_artwork, download_all_artwork):
+    for video in shows:
+        showTitle = video.title
+        showFolder = video.locations[0] + "\\"
+        showPoster = video.thumb
+        
+        print(f"Downloading images for {showTitle}")
+        if not download_artwork(showFolder, showPoster, "poster.png"):
+            skipped_items.append({"title": showTitle, "reason": "Missing Poster"})
+            logger.info(f"Skipped show: {showTitle} - Missing Poster")
+
+        for season in video.seasons():
+            seasonTitle = season.title
+            seasonThumb = season.thumb
+            seasonFolder = showFolder
+            seasonNumber = str(season.index).zfill(2)
+            seasonPosterName = f"season{seasonNumber}.png"
+
+            if not download_artwork(seasonFolder, seasonThumb, seasonPosterName):
+                skipped_items.append({"title": f"{showTitle} - {seasonTitle}", "reason": "Missing Season Poster"})
+                logger.info(f"Skipped season: {showTitle} - {seasonTitle} - Missing Season Poster")
+
+        if download_episode_artwork:
+            for episode in video.episodes():
                 episodeTitle = episode.title
                 episodePath = episode.locations[0].rpartition('\\')[0] + "\\"
                 episodeFile = episode.locations[0][episode.locations[0].rindex("\\")+1:][:-4]
                 episodeThumb = episode.thumb
-                episodeThumbPath = download(baseurl + episodeThumb, token, episodeFile + ".png", episodePath)
-    print(" ")
-        
-while (repeat):
-    runScript()
-    runagain = input("Would you like to run on another library (y/n)?   ")
-    if(runagain != "y"):
-        repeat = False
-else:
-    exit()
+
+                # Check for custom artwork if required
+                if not download_all_artwork and not episodeThumb:
+                    continue
+
+                if not download_artwork(episodePath, episodeThumb, episodeFile + ".png"):
+                    skipped_items.append({"title": f"{showTitle} - {episodeTitle}", "reason": "Missing Episode Artwork"})
+                    logger.info(f"Skipped episode: {showTitle} - {episodeTitle} - Missing Episode Artwork")
+
+def run_script():
+    # list libraries for user to select which to export from
+    sectionList = [x.title for x in plex.library.sections()]
+    print("\nYour Libraries: ")
+    for i, title in enumerate(sectionList):
+        print(f"      {i} - {title}")
+
+    selectedLibraries = input("Enter the numbers of the libraries to export posters from (e.g. 1,3,5): ").split(',')
+
+    # Choose the type of artwork to download
+    download_posters = input("Download posters? (y/n): ").lower() == 'y'
+    download_backgrounds = input("Download backgrounds? (y/n): ").lower() == 'y'
+    download_banners = input("Download banners? (y/n): ").lower() == 'y'
+    download_themes = input("Download themes? (y/n): ").lower() == 'y'
+
+    # Ask if we should download episode artwork and if it should be for all or only custom
+    download_episode_artwork = input("Download episode artwork? (y/n): ").lower() == 'y'
+    download_all_artwork = input("Download all artwork (including defaults)? (y/n): ").lower() == 'y'
+
+    for libraryIndex in selectedLibraries:
+        selectedLibrary = int(libraryIndex)
+        selectedLibraryType = plex.library.section(sectionList[selectedLibrary]).type
+        selectedLibraryItems = plex.library.section(sectionList[selectedLibrary]).search()
+
+        if selectedLibraryType == "movie":
+            if download_posters:
+                process_movies(selectedLibraryItems)
+
+        elif selectedLibraryType == "show":
+            process_shows(selectedLibraryItems, download_episode_artwork, download_all_artwork)
+
+    report_skipped_items()
+
+while True:
+    run_script()
+    runagain = input("Would you like to run on another library (y/n)? ").lower()
+    if runagain != "y":
+        break
