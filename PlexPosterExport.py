@@ -1,5 +1,5 @@
 # Set variables here, otherwise you will be asked them during script run
-baseurl = 'http://127.0.0.1:32400'
+baseurl = ''
 token = ''
 
 ######################################################################################################
@@ -11,6 +11,8 @@ token = ''
 #                                                                                                    #
 ######################################################################################################
 
+import os
+import platform
 import logging
 from logging.handlers import RotatingFileHandler
 from plexapi.server import PlexServer
@@ -43,6 +45,16 @@ def download_artwork(item, artwork_url, save_path):
         return False
     return True
 
+def create_hardlink(original_file, hardlink_file):
+    try:
+        if platform.system() == 'Windows':
+            os.link(original_file, hardlink_file)
+        else:
+            os.symlink(original_file, hardlink_file)  # Use symbolic link for Unix-like systems
+        logger.info(f"Created hardlink: {hardlink_file}")
+    except Exception as e:
+        logger.error(f"Failed to create hardlink for {hardlink_file}: {str(e)}")
+
 def report_skipped_items():
     if skipped_items:
         print("\nSkipped items:")
@@ -51,28 +63,36 @@ def report_skipped_items():
     else:
         print("No items were skipped.")
 
-def process_movies(movies):
+def process_movies(movies, create_hardlink_option):
     for video in movies:
         videoTitle = video.title
         videoPath = video.media[0].parts[0].file
         videoFolder = videoPath.rpartition('\\')[0] + "\\"
         videoPoster = video.thumb
+        movie_filename = os.path.basename(videoPath)
+        movie_filename_without_ext = movie_filename[:movie_filename.rindex('.')]
 
         print(f"Downloading poster for {videoTitle}")
         if not download_artwork(videoFolder, videoPoster, "poster.png"):
             skipped_items.append({"title": videoTitle, "reason": "Missing Poster"})
             logger.info(f"Skipped movie: {videoTitle} - Missing Poster")
+        elif create_hardlink_option:
+            hardlink_path = os.path.join(videoFolder, f"{movie_filename_without_ext}.png")
+            create_hardlink(os.path.join(videoFolder, "poster.png"), hardlink_path)
 
-def process_shows(shows, download_episode_artwork, download_all_artwork):
+def process_shows(shows, download_episode_artwork, download_all_artwork, create_hardlink_option):
     for video in shows:
         showTitle = video.title
         showFolder = video.locations[0] + "\\"
         showPoster = video.thumb
-        
+
         print(f"Downloading images for {showTitle}")
         if not download_artwork(showFolder, showPoster, "poster.png"):
             skipped_items.append({"title": showTitle, "reason": "Missing Poster"})
             logger.info(f"Skipped show: {showTitle} - Missing Poster")
+        elif create_hardlink_option:
+            hardlink_path = os.path.join(showFolder, f"{showTitle}.png")
+            create_hardlink(os.path.join(showFolder, "poster.png"), hardlink_path)
 
         for season in video.seasons():
             seasonTitle = season.title
@@ -118,6 +138,9 @@ def run_script():
     # Ask if we should download episode artwork and if it should be for all or only custom
     download_episode_artwork = input("Download episode artwork? (y/n): ").lower() == 'y'
     download_all_artwork = input("Download all artwork (including defaults)? (y/n): ").lower() == 'y'
+    
+    # Option to create hardlink
+    create_hardlink_option = input("Create hardlinks with folder name? (y/n): ").lower() == 'y'
 
     for libraryIndex in selectedLibraries:
         selectedLibrary = int(libraryIndex)
@@ -126,10 +149,10 @@ def run_script():
 
         if selectedLibraryType == "movie":
             if download_posters:
-                process_movies(selectedLibraryItems)
+                process_movies(selectedLibraryItems, create_hardlink_option)
 
         elif selectedLibraryType == "show":
-            process_shows(selectedLibraryItems, download_episode_artwork, download_all_artwork)
+            process_shows(selectedLibraryItems, download_episode_artwork, download_all_artwork, create_hardlink_option)
 
     report_skipped_items()
 
