@@ -29,7 +29,9 @@ You will be given an option to create a Hardlink of the `poster.png` file with t
 - The season covers will be exported to the parent directory of the show with the name `season##.png`
 - The episode title cards will be exported next to each file with the name matching the video file.
 
-At the end of the script, you can instantly run it again on another library by entering `y` (case sensitive)
+At the end of the script, you can instantly run it again on another library by entering `y` (**NO LONGER** case sensitive)
 
 
 I know it's not the most elegant code but it's functional :)
+
+<sub><sup>This code has been edited with the help of ChatGPT</sup></sub>

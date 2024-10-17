@@ -47,10 +47,7 @@ def download_artwork(item, artwork_url, save_path):
 
 def create_hardlink(original_file, hardlink_file):
     try:
-        if platform.system() == 'Windows':
-            os.link(original_file, hardlink_file)
-        else:
-            os.symlink(original_file, hardlink_file)  # Use symbolic link for Unix-like systems
+        os.link(original_file, hardlink_file)  # Create hardlink for both Windows and Linux/Unix
         logger.info(f"Created hardlink: {hardlink_file}")
     except Exception as e:
         logger.error(f"Failed to create hardlink for {hardlink_file}: {str(e)}")
